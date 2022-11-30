@@ -3,46 +3,8 @@ const std = @import("std");
 const stdin = std.io.getStdIn();
 const stdout = std.io.getStdOut();
 
-const ipv6parse = std.net.Address.parseIp6;
-
-const readLineErr = error{bufOverflow};
-
-const Buffer = struct {
-    const Self = @This();
-
-    string: [256]u8 = undefined,
-    at: u8 = 0,
-    isReady: bool = false,
-
-    pub fn getSlice(self: Self) []const u8 {
-        return self.string[0..self.at];
-    }
-
-    pub fn reset(self: *Self) void {
-        for (self.string) |value, index| {
-            _ = value;
-            self.string[index] = 0;
-        }
-        self.at = 0;
-        self.isReady = false;
-    }
-
-    pub fn readUntilNewline(self: *Self, reader: anytype) !void {
-        while (true) {
-            var result: [1]u8 = undefined;
-            const readbytes = try reader.read(result[0..]);
-            if (readbytes < 0) return;
-            if (self.at == 255) return readLineErr.bufOverflow;
-            if (result[0] == '\n') {
-                self.isReady = true;
-                return;
-            }
-            self.string[self.at] = result[0];
-            self.at += 1;
-            sleepms(1);
-        }
-    }
-};
+const clientErr = error{brokenStream};
+const clientStat = enum { joining, exiting, waiting };
 
 fn sleepms(milliseconds: u64) void {
     std.time.sleep(milliseconds * 1_000_000);
@@ -50,17 +12,63 @@ fn sleepms(milliseconds: u64) void {
 }
 
 pub fn main() !void {
-    //var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    //const allocator = gpa.allocator();
-    std.debug.print("demo\n>", .{});
-    var buffere = Buffer{};
-    buffere.string[0] = 'e';
-    buffere.at = 1;
-    buffere.reset();
-    while (!buffere.isReady) {
-        try buffere.readUntilNewline(stdin.reader());
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
+
+    //    var bufferInst = Buffer{};
+
+    std.debug.print("Zirc demo\nEnter Server hostname: ", .{});
+
+    //    var hostname: []const u8 = bufferInst.getSlice();
+
+    const hostname: []const u8 = (try stdin.reader().readUntilDelimiterOrEofAlloc(allocator, '\n', 4096)).?;
+
+    //    bufferInst.reset();
+
+    std.debug.print("\nEnter Server port: ", .{});
+
+    const portslice: []const u8 = (try stdin.reader().readUntilDelimiterOrEofAlloc(allocator, '\n', 4096)).?;
+
+    var port: u16 = std.fmt.parseUnsigned(u16, portslice, 10) catch |err| switch (err) {
+        error.Overflow => {
+            std.debug.print("Couldn't parse port, enter between 0-65535", .{});
+            std.os.exit(1);
+        },
+        else => @panic("oongaboonga"),
+    };
+    //    bufferInst.reset();
+
+    std.debug.print("\n Address: {s} {any}", .{ hostname, port });
+
+    if (!std.net.isValidHostName(hostname)) {
+        std.debug.print("Couldn't parse thy address", .{});
+        std.os.exit(1);
     }
-    std.debug.print("you said> {s}\n", .{buffere.getSlice()});
-    std.debug.print("type of getslice: {any}", .{@TypeOf(buffere.getSlice())});
-    std.os.exit(0);
+
+    const connection = std.net.tcpConnectToHost(allocator, hostname, port) catch |err| {
+        std.debug.print("Error: Couldn't connect to host: {any}", .{err});
+        std.os.exit(1);
+    };
+
+    var status: clientStat = .joining;
+
+    while (true) {
+        clientLoop(status, connection, stdin.reader(), stdin.writer()) catch |err| switch (err) {
+            else => return err,
+        };
+    }
+
+    allocator.free(hostname);
+    allocator.free(portslice);
+
+    //    bufferInst.reset();
+}
+
+pub fn clientLoop(status: clientStat, connection: std.net.Stream, input: anytype, output: anytype) !void {
+    if (status == .joining) {
+        try connection.writer().print("NICK {s}", .{"p32"});
+    }
+    _ = input;
+    _ = output;
 }
